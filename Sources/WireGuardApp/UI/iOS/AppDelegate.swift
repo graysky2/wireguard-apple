@@ -7,78 +7,76 @@ import os.log
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
 
-    var window: UIWindow?
     var mainVC: MainViewController?
-    var isLaunchedForSpecificAction = false
 
     func application(_ application: UIApplication, willFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         Logger.configureGlobal(tagged: "APP", withFilePath: FileManager.logFileURL?.path)
 
-        if let launchOptions = launchOptions {
-            if launchOptions[.url] != nil || launchOptions[.shortcutItem] != nil {
-                isLaunchedForSpecificAction = true
-            }
-        }
-
-        let window = UIWindow(frame: UIScreen.main.bounds)
-        self.window = window
-
-        let mainVC = MainViewController()
-        window.rootViewController = mainVC
-        window.makeKeyAndVisible()
-
-        self.mainVC = mainVC
-
         return true
-    }
-
-    func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
-        mainVC?.importFromDisposableFile(url: url)
-        return true
-    }
-
-    func applicationDidBecomeActive(_ application: UIApplication) {
-        mainVC?.refreshTunnelConnectionStatuses()
-    }
-
-    func applicationWillResignActive(_ application: UIApplication) {
-        guard let allTunnelNames = mainVC?.allTunnelNames() else { return }
-        application.shortcutItems = QuickActionItem.createItems(allTunnelNames: allTunnelNames)
-    }
-
-    func application(_ application: UIApplication, performActionFor shortcutItem: UIApplicationShortcutItem, completionHandler: @escaping (Bool) -> Void) {
-        guard shortcutItem.type == QuickActionItem.type else {
-            completionHandler(false)
-            return
-        }
-        let tunnelName = shortcutItem.localizedTitle
-        mainVC?.showTunnelDetailForTunnel(named: tunnelName, animated: false, shouldToggleStatus: true)
-        completionHandler(true)
     }
 }
 
-extension AppDelegate {
-    func application(_ application: UIApplication, shouldSaveApplicationState coder: NSCoder) -> Bool {
-        return true
+/// Owns the window and main view controller. iOS 27 requires apps built with its SDK to adopt the
+/// UIScene lifecycle; the app-delegate-owned window used to be enough.
+class SceneDelegate: UIResponder, UIWindowSceneDelegate {
+    private static let lastDisplayedTunnelKey = "lastDisplayedTunnelName"
+
+    var window: UIWindow?
+
+    private var appDelegate: AppDelegate? {
+        return UIApplication.shared.delegate as? AppDelegate
     }
 
-    func application(_ application: UIApplication, shouldRestoreApplicationState coder: NSCoder) -> Bool {
-        return !self.isLaunchedForSpecificAction
-    }
+    func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
+        guard let windowScene = scene as? UIWindowScene else { return }
 
-    func application(_ application: UIApplication, viewControllerWithRestorationIdentifierPath identifierComponents: [String], coder: NSCoder) -> UIViewController? {
-        guard let vcIdentifier = identifierComponents.last else { return nil }
-        if vcIdentifier.hasPrefix("TunnelDetailVC:") {
-            let tunnelName = String(vcIdentifier.suffix(vcIdentifier.count - "TunnelDetailVC:".count))
-            if let tunnelsManager = mainVC?.tunnelsManager {
-                if let tunnel = tunnelsManager.tunnel(named: tunnelName) {
-                    return TunnelDetailTableViewController(tunnelsManager: tunnelsManager, tunnel: tunnel)
-                }
-            } else {
-                // Show it when tunnelsManager is available
-                mainVC?.showTunnelDetailForTunnel(named: tunnelName, animated: false, shouldToggleStatus: false)
+        let mainVC = MainViewController()
+        let window = UIWindow(windowScene: windowScene)
+        window.rootViewController = mainVC
+        window.makeKeyAndVisible()
+        self.window = window
+        appDelegate?.mainVC = mainVC
+
+        if !connectionOptions.urlContexts.isEmpty || connectionOptions.shortcutItem != nil {
+            if let url = connectionOptions.urlContexts.first?.url {
+                mainVC.importFromDisposableFile(url: url)
             }
+            if let shortcutItem = connectionOptions.shortcutItem {
+                handle(shortcutItem: shortcutItem)
+            }
+        } else if let tunnelName = UserDefaults.standard.string(forKey: Self.lastDisplayedTunnelKey) {
+            mainVC.showTunnelDetailForTunnel(named: tunnelName, animated: false, shouldToggleStatus: false)
         }
-        return nil
+    }
+
+    func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+        guard let url = URLContexts.first?.url else { return }
+        appDelegate?.mainVC?.importFromDisposableFile(url: url)
+    }
+
+    func sceneDidBecomeActive(_ scene: UIScene) {
+        appDelegate?.mainVC?.refreshTunnelConnectionStatuses()
+    }
+
+    func sceneWillResignActive(_ scene: UIScene) {
+        // iOS discards a scene's saved state when the user force-quits, so remember the open tunnel ourselves.
+        if let tunnelName = appDelegate?.mainVC?.displayedTunnelName {
+            UserDefaults.standard.set(tunnelName, forKey: Self.lastDisplayedTunnelKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.lastDisplayedTunnelKey)
+        }
+        guard let allTunnelNames = appDelegate?.mainVC?.allTunnelNames() else { return }
+        UIApplication.shared.shortcutItems = QuickActionItem.createItems(allTunnelNames: allTunnelNames)
+    }
+
+    func windowScene(_ windowScene: UIWindowScene, performActionFor shortcutItem: UIApplicationShortcutItem, completionHandler: @escaping (Bool) -> Void) {
+        completionHandler(handle(shortcutItem: shortcutItem))
+    }
+
+    @discardableResult
+    private func handle(shortcutItem: UIApplicationShortcutItem) -> Bool {
+        guard shortcutItem.type == QuickActionItem.type else { return false }
+        appDelegate?.mainVC?.showTunnelDetailForTunnel(named: shortcutItem.localizedTitle, animated: false, shouldToggleStatus: true)
+        return true
     }
 }

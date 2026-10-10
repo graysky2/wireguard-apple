@@ -88,6 +88,19 @@ extension MainViewController {
         }
     }
 
+    /// Name of the tunnel whose detail screen is currently in a navigation stack, if any.
+    var displayedTunnelName: String? {
+        func detail(in controllers: [UIViewController]) -> TunnelDetailTableViewController? {
+            for controller in controllers {
+                if let detail = controller as? TunnelDetailTableViewController { return detail }
+                if let navigationController = controller as? UINavigationController,
+                   let detail = detail(in: navigationController.viewControllers) { return detail }
+            }
+            return nil
+        }
+        return detail(in: viewControllers)?.tunnel.name
+    }
+
     func showTunnelDetailForTunnel(named tunnelName: String, animated: Bool, shouldToggleStatus: Bool) {
         let showTunnelDetailBlock: (TunnelsManager) -> Void = { [weak self] tunnelsManager in
             guard let self = self else { return }

@@ -1,0 +1,33 @@
+name: Build WireGuard for iOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [battery-drain, master]
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: brew install go swiftlint
+
+      - name: Configure developer settings
+        run: |
+          sed -e 's/<team_id>/XXXXXXXXXX/' -e 's/<app_id>/com.example.wireguard/' \
+            Sources/WireGuardApp/Config/Developer.xcconfig.template \
+            > Sources/WireGuardApp/Config/Developer.xcconfig
+
+      - name: Build iOS app
+        run: |
+          xcodebuild -project WireGuard.xcodeproj -target WireGuardiOS \
+            -configuration Debug -sdk iphoneos \
+            SYMROOT="$PWD/build" CODE_SIGNING_ALLOWED=NO build
+
+      - name: Upload app bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: WireGuard-iOS-build
+          path: build/Debug-iphoneos/WireGuard.app

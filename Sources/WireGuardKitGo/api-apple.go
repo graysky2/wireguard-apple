@@ -16,11 +16,14 @@ import "C"
 import (
 	"fmt"
 	"math"
+	"net"
 	"os"
 	"os/signal"
 	"runtime"
 	"runtime/debug"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -57,6 +60,42 @@ type tunnelHandle struct {
 }
 
 var tunnelHandles = make(map[int32]tunnelHandle)
+
+var (
+	lastSourcesMu sync.Mutex
+	lastSources   = make(map[int32]string)
+)
+
+// localSources returns each peer endpoint paired with the local address the OS
+// would use to reach it. A UDP connect only performs a route lookup; nothing is
+// sent.
+func localSources(dev *device.Device) string {
+	cfg, err := dev.IpcGet()
+	if err != nil {
+		return ""
+	}
+	var srcs []string
+	for _, line := range strings.Split(cfg, "\n") {
+		if !strings.HasPrefix(line, "endpoint=") {
+			continue
+		}
+		endpoint := strings.TrimPrefix(line, "endpoint=")
+		raddr, err := net.ResolveUDPAddr("udp", endpoint)
+		if err != nil {
+			continue
+		}
+		c, err := net.DialUDP("udp", nil, raddr)
+		if err != nil {
+			continue
+		}
+		if laddr, ok := c.LocalAddr().(*net.UDPAddr); ok {
+			srcs = append(srcs, endpoint+">"+laddr.IP.String())
+		}
+		c.Close()
+	}
+	sort.Strings(srcs)
+	return strings.Join(srcs, ",")
+}
 
 func init() {
 	signals := make(chan os.Signal)
@@ -140,6 +179,9 @@ func wgTurnOff(tunnelHandle int32) {
 		return
 	}
 	delete(tunnelHandles, tunnelHandle)
+	lastSourcesMu.Lock()
+	delete(lastSources, tunnelHandle)
+	lastSourcesMu.Unlock()
 	dev.Close()
 }
 
@@ -183,7 +225,17 @@ func wgBumpSockets(tunnelHandle int32) {
 		for i := 0; i < 10; i++ {
 			err := dev.BindUpdate()
 			if err == nil {
-				dev.SendKeepalivesToPeersWithCurrentKeypair()
+				src := localSources(dev.Device)
+				lastSourcesMu.Lock()
+				changed := src == "" || src != lastSources[tunnelHandle]
+				lastSources[tunnelHandle] = src
+				lastSourcesMu.Unlock()
+				if changed {
+					dev.Verbosef("Local source addresses changed to %q, sending keepalive", src)
+					dev.SendKeepalivesToPeersWithCurrentKeypair()
+				} else {
+					dev.Verbosef("Local source address unchanged, skipping keepalive")
+				}
 				return
 			}
 			dev.Errorf("Unable to update bind, try %d: %v", i+1, err)

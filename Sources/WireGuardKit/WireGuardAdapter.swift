@@ -181,7 +181,7 @@ public class WireGuardAdapter {
                 return
             }
 
-            let networkMonitor = NWPathMonitor()
+            let networkMonitor = NWPathMonitor(prohibitedInterfaceTypes: [.other])
             networkMonitor.pathUpdateHandler = { [weak self] path in
                 self?.didReceivePathUpdate(path: path)
             }
